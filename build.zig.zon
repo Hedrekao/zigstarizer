@@ -1,0 +1,7 @@
+.{
+    .name = ._3d_graphics,
+    .version = "0.0.1",
+    .minimum_zig_version = "0.15.2",
+    .paths = .{""},
+    .fingerprint = 0x54be679313e2808e,
+}
