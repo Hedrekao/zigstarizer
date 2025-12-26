@@ -73,10 +73,7 @@ pub inline fn rasterizeTriangle(
     // Backface culling
     if (area <= 0) return;
 
-    // Skip degenerate triangles only (render both front and back faces)
-    if (@abs(area) <= 0.001) return;
-
-    const inv_area = 1.0 / @abs(area);
+    const inv_area = 1.0 / area;
 
     // Calculate bounding box of triangle
     const minX = @max(0, @as(i32, @intFromFloat(g.min3(v0.x, v1.x, v2.x))));
@@ -118,16 +115,15 @@ pub inline fn rasterizeTriangle(
     var w1_row = A1 * start_x + B1 * start_y + C1;
     var w2_row = A2 * start_x + B2 * start_y + C2;
 
-
     // We can also optimize calculating z
-    // z = bc0 * v0.z + bc1 * v1.z + bc2 * v2.z
+    // 1/z = bc0 * 1/v0.z + bc1 * 1/v1.z + bc2 * 1/v2.z
     // bc0 + bc1 + bc2 = 1
     // bc0 = 1 - bc1 - bc2
-    // z = (1 - bc1 - bc2) * v0.z + bc1 * v1.z + bc2 * v2.z
-    // z = v0.z + bc1 * (v1.z - v0.z) + bc2 * (v2.z - v0.z)
-    // where A = v1.z - v0.z and B = v2.z - v0.z are constants for the triangle
-    const Az = v1.z - v0.z;
-    const Bz = v2.z - v0.z;
+    // 1/z = (1 - bc1 - bc2) * 1/v0.z + bc1 * 1/v1.z + bc2 * 1/v2.z
+    // 1/z = 1/v0.z + bc1 * (1/v1.z - 1/v0.z) + bc2 * (1/v2.z - 1/v0.z)
+    // where A = 1/v1.z - 1/v0.z and B = 1/v2.z - 1/v0.z are constants for the triangle
+    const Az = 1 / v1.z - 1 / v0.z;
+    const Bz = 1 / v2.z - 1 / v0.z;
 
     // Loop through bounding box with incremental evaluation
     var y: i32 = minY;
@@ -140,7 +136,6 @@ pub inline fn rasterizeTriangle(
         var x: i32 = minX;
         while (x <= maxX) : (x += 1) {
 
-
             // Check if inside triangle
             if (w0 >= 0 and w1 >= 0 and w2 >= 0) {
 
@@ -149,7 +144,8 @@ pub inline fn rasterizeTriangle(
                 const bc2 = w2 * inv_area;
 
                 // Interpolate depth
-                const z = v0.z + bc1 * Az + bc2 * Bz;
+                const inv_z = 1 / v0.z + bc1 * Az + bc2 * Bz;
+                const z = 1.0 / inv_z;
 
                 const index = @as(usize, @intCast(@as(u32, @intCast(y)) * self.screen_width + @as(u32, @intCast(x))));
 
