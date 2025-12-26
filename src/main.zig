@@ -36,11 +36,25 @@ pub fn main() !void {
     var event: c.SDL_Event = undefined;
 
     const keyboard_state = c.SDL_GetKeyboardState(null);
+
     var last_time = c.SDL_GetTicks();
 
     // FPS tracking
     var frame_count: u32 = 0;
     var fps_timer: u32 = 0;
+
+    // Pre-compute triangle colors
+    var triangle_colors = try allocator.alloc(u32, xtree.faces.len);
+    defer allocator.free(triangle_colors);
+
+    for (xtree.faces, 0..) |face, i| {
+        const hash = (face.v1 *% 73) +% (face.v2 *% 151) +% (face.v3 *% 283);
+        const variation = @as(u8, @truncate(hash % 128));
+        const r: u8 = 0x20 + variation / 4;
+        const green: u8 = 0x80 + variation;
+        const b: u8 = 0x20 + variation / 6;
+        triangle_colors[i] = (@as(u32, r) << 16) | (@as(u32, green) << 8) | @as(u32, b);
+    }
 
     while (running) {
         const current_time = c.SDL_GetTicks();
@@ -113,7 +127,7 @@ pub fn main() !void {
 
             rasterizer.clearBuffers(framebuffer);
 
-            for (xtree.faces) |face| {
+            for (xtree.faces, 0..) |face, i| {
                 const v0_w = xtree.vertices[face.v1];
                 const v1_w = xtree.vertices[face.v2];
                 const v2_w = xtree.vertices[face.v3];
@@ -125,17 +139,7 @@ pub fn main() !void {
                 // Skip triangles behind camera
                 if (v0_r.x < 0 or v1_r.x < 0 or v2_r.x < 0) continue;
 
-                // Hash the face indices to get color variation
-                const hash = (face.v1 *% 73) +% (face.v2 *% 151) +% (face.v3 *% 283);
-                const variation = @as(u8, @truncate(hash % 128)); // 0-127 range
-
-                const r: u8 = 0x20 + variation / 4; // 32-63 (keep red low)
-                const green: u8 = 0x80 + variation; // 128-255 (force green to be dominant)
-                const b: u8 = 0x20 + variation / 6; // 32-53 (keep blue low)
-
-                const color_packed: u32 = (@as(u32, r) << 16) | (@as(u32, green) << 8) | @as(u32, b);
-
-                rasterizer.rasterizeTriangle(framebuffer, v0_r, v1_r, v2_r, color_packed);
+                rasterizer.rasterizeTriangle(framebuffer, v0_r, v1_r, v2_r, triangle_colors[i]);
             }
 
             c.SDL_UnlockSurface(screen);

@@ -2,7 +2,6 @@ const std = @import("std");
 const g = @import("geometry.zig");
 
 pub fn main() !void {
-
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -35,8 +34,9 @@ pub fn main() !void {
 
     while (try reader.takeDelimiter('\n')) |line| {
         if (line.len == 0) continue;
-        var parts = std.mem.splitScalar(u8, line[2..], ' ');
-        if (line[0] == 'v') {
+        var parts = std.mem.splitScalar(u8, line, ' ');
+        const indicator = parts.next().?;
+        if (std.mem.eql(u8, indicator, "v")) {
             var x = try std.fmt.parseFloat(f32, parts.next().?);
             var y = try std.fmt.parseFloat(f32, parts.next().?);
             var z = try std.fmt.parseFloat(f32, parts.next().?);
@@ -46,11 +46,21 @@ pub fn main() !void {
             if (x == -0.0) x = 0.0;
 
             try vertices.append(allocator, g.V3f{ .x = x, .y = y, .z = z });
-        } else if (line[0] == 'f') {
-            const v1_idx = try std.fmt.parseInt(u32, parts.next().?, 10) - 1;
-            const v2_idx = try std.fmt.parseInt(u32, parts.next().?, 10) - 1;
-            const v3_idx = try std.fmt.parseInt(u32, parts.next().?, 10) - 1;
-            try faces.append(allocator, g.Face{ .v1 = v1_idx, .v2 = v2_idx, .v3 = v3_idx });
+        } else if (std.mem.eql(u8, indicator, "f")) {
+            var face: g.Face = undefined;
+            for (0..3) |i| {
+                const face_part = parts.next().?;
+                var face_iter = std.mem.splitScalar(u8, face_part, '/');
+                const vertex_index = try std.fmt.parseInt(u32, face_iter.next().?, 10) - 1;
+                switch (i) {
+                    0 => face.v1 = vertex_index,
+                    1 => face.v2 = vertex_index,
+                    2 => face.v3 = vertex_index,
+                    else => unreachable,
+                }
+            }
+
+            try faces.append(allocator, face);
         }
     }
 
