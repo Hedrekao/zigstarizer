@@ -26,7 +26,7 @@ pub fn build(b: *std.Build) void {
     const model_names = [_][]const u8{ "xtree", "cow" };
     var model_modules: [model_names.len]*std.Build.Module = undefined;
 
-    for (model_names, 0..) |model_name, i| {
+    inline for (model_names, 0..) |model_name, i| {
         const obj_path = b.fmt("assets/{s}.obj", .{model_name});
         const zig_name = b.fmt("{s}.zig", .{model_name});
 

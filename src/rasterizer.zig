@@ -70,6 +70,9 @@ pub inline fn rasterizeTriangle(
     // Compute triangle area using edge function
     const area = (v2.x - v0.x) * (v1.y - v0.y) - (v2.y - v0.y) * (v1.x - v0.x);
 
+    // Backface culling
+    if (area <= 0) return;
+
     // Skip degenerate triangles only (render both front and back faces)
     if (@abs(area) <= 0.001) return;
 
@@ -115,6 +118,17 @@ pub inline fn rasterizeTriangle(
     var w1_row = A1 * start_x + B1 * start_y + C1;
     var w2_row = A2 * start_x + B2 * start_y + C2;
 
+
+    // We can also optimize calculating z
+    // z = bc0 * v0.z + bc1 * v1.z + bc2 * v2.z
+    // bc0 + bc1 + bc2 = 1
+    // bc0 = 1 - bc1 - bc2
+    // z = (1 - bc1 - bc2) * v0.z + bc1 * v1.z + bc2 * v2.z
+    // z = v0.z + bc1 * (v1.z - v0.z) + bc2 * (v2.z - v0.z)
+    // where A = v1.z - v0.z and B = v2.z - v0.z are constants for the triangle
+    const Az = v1.z - v0.z;
+    const Bz = v2.z - v0.z;
+
     // Loop through bounding box with incremental evaluation
     var y: i32 = minY;
     while (y <= maxY) : (y += 1) {
@@ -126,32 +140,21 @@ pub inline fn rasterizeTriangle(
         var x: i32 = minX;
         while (x <= maxX) : (x += 1) {
 
-            var edge0 = w0;
-            var edge1 = w1;
-            var edge2 = w2;
-
-            // Flip signs for negative area triangles (to show both faces of model)
-            if (area < 0) {
-                edge0 = -edge0;
-                edge1 = -edge1;
-                edge2 = -edge2;
-            }
 
             // Check if inside triangle
-            if (edge0 >= 0 and edge1 >= 0 and edge2 >= 0) {
+            if (w0 >= 0 and w1 >= 0 and w2 >= 0) {
 
                 // Barycentric coordinates
-                const bc0 = edge0 * inv_area;
-                const bc1 = edge1 * inv_area;
-                const bc2 = edge2 * inv_area;
+                const bc1 = w1 * inv_area;
+                const bc2 = w2 * inv_area;
 
                 // Interpolate depth
-                const depth = bc0 * v0.z + bc1 * v1.z + bc2 * v2.z;
+                const z = v0.z + bc1 * Az + bc2 * Bz;
 
                 const index = @as(usize, @intCast(@as(u32, @intCast(y)) * self.screen_width + @as(u32, @intCast(x))));
 
-                if (depth < self.zbuffer[index]) {
-                    self.zbuffer[index] = depth;
+                if (z < self.zbuffer[index]) {
+                    self.zbuffer[index] = z;
                     framebuffer[index] = color_packed;
                 }
             }
