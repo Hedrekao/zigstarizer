@@ -9,14 +9,15 @@ Tricks I learned so far:
 - all the camera navigation
 - incremental evaluation of edge function
 - triangle bounding box
+- perspective correct interpolation
+- backface culling
 
 ### How it looks so far
 #### The christmas demo
 https://github.com/user-attachments/assets/9c356bde-8014-4363-b64b-08fd2b31e32b
 
 #### The COW demo
-
-
+https://github.com/user-attachments/assets/7ffa1224-aeef-48fe-8306-c6e295a066d6
 
 You can either run obj2zig to manually translate obj file to zig one using
 
