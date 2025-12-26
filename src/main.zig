@@ -1,6 +1,7 @@
 const std = @import("std");
 const g = @import("geometry");
 const xtree = @import("xtree");
+const cow = @import("cow");
 const Rasterizer = @import("rasterizer.zig");
 const Camera = @import("camera.zig");
 const c = @cImport(
@@ -13,10 +14,35 @@ const SCREEN_HEIGHT = 640;
 const MOVE_SPEED = 15.0; // Units per second
 const ROTATE_SPEED = 1.0; // Radians per second
 
+const Model = struct {
+    vertices: []const g.V3f,
+    faces: []const g.Face,
+};
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
+
+    const model_name = if (args.len > 1) args[1] else "xtree";
+
+    const model: Model = if (std.mem.eql(u8, model_name, "cow"))
+        .{ .vertices = &cow.vertices, .faces = &cow.faces }
+    else if (std.mem.eql(u8, model_name, "xtree"))
+        .{ .vertices = &xtree.vertices, .faces = &xtree.faces }
+    else {
+        std.debug.print("Unknown model: {s}\nAvailable: xtree, cow\n", .{model_name});
+        return error.InvalidModel;
+    };
+
+    std.debug.print("Loading model: {s} ({d} vertices, {d} faces)\n", .{
+        model_name,
+        model.vertices.len,
+        model.faces.len,
+    });
 
     _ = c.SDL_Init(c.SDL_INIT_VIDEO);
     defer c.SDL_Quit();
@@ -44,10 +70,10 @@ pub fn main() !void {
     var fps_timer: u32 = 0;
 
     // Pre-compute triangle colors
-    var triangle_colors = try allocator.alloc(u32, xtree.faces.len);
+    var triangle_colors = try allocator.alloc(u32, model.faces.len);
     defer allocator.free(triangle_colors);
 
-    for (xtree.faces, 0..) |face, i| {
+    for (model.faces, 0..) |face, i| {
         const hash = (face.v1 *% 73) +% (face.v2 *% 151) +% (face.v3 *% 283);
         const variation = @as(u8, @truncate(hash % 128));
         const r: u8 = 0x20 + variation / 4;
@@ -127,10 +153,10 @@ pub fn main() !void {
 
             rasterizer.clearBuffers(framebuffer);
 
-            for (xtree.faces, 0..) |face, i| {
-                const v0_w = xtree.vertices[face.v1];
-                const v1_w = xtree.vertices[face.v2];
-                const v2_w = xtree.vertices[face.v3];
+            for (model.faces, 0..) |face, i| {
+                const v0_w = model.vertices[face.v1];
+                const v1_w = model.vertices[face.v2];
+                const v2_w = model.vertices[face.v3];
 
                 const v0_r = rasterizer.projectVertex(v0_w, camera);
                 const v1_r = rasterizer.projectVertex(v1_w, camera);
