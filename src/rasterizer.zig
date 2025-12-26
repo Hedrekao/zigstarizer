@@ -2,7 +2,7 @@ const std = @import("std");
 const g = @import("geometry");
 const Camera = @import("camera.zig");
 
-const BG_COLOR = 0x00202020; // Dark gray background
+const BG_COLOR = g.Color{ .r = 32, .g = 32, .b = 32 };
 
 const Rasterizer = @This();
 
@@ -64,7 +64,9 @@ pub inline fn rasterizeTriangle(
     v0: g.V3f,
     v1: g.V3f,
     v2: g.V3f,
-    color_packed: u32,
+    c0: g.Color,
+    c1: g.Color,
+    c2: g.Color,
 ) void {
 
     // Compute triangle area using edge function
@@ -122,8 +124,17 @@ pub inline fn rasterizeTriangle(
     // 1/z = (1 - bc1 - bc2) * 1/v0.z + bc1 * 1/v1.z + bc2 * 1/v2.z
     // 1/z = 1/v0.z + bc1 * (1/v1.z - 1/v0.z) + bc2 * (1/v2.z - 1/v0.z)
     // where A = 1/v1.z - 1/v0.z and B = 1/v2.z - 1/v0.z are constants for the triangle
-    const Az = 1 / v1.z - 1 / v0.z;
-    const Bz = 1 / v2.z - 1 / v0.z;
+    const inv_z0 = 1 / v0.z;
+    const inv_z1 = 1 / v1.z;
+    const inv_z2 = 1 / v2.z;
+
+    const Az = inv_z1 - inv_z0;
+    const Bz = inv_z2 - inv_z0;
+
+    // Perspective-correct attribute interpolation: multiply by 1/z before interpolating
+    const c0_over_z = g.Color{ .r = c0.r * inv_z0, .g = c0.g * inv_z0, .b = c0.b * inv_z0 };
+    const c1_over_z = g.Color{ .r = c1.r * inv_z1, .g = c1.g * inv_z1, .b = c1.b * inv_z1 };
+    const c2_over_z = g.Color{ .r = c2.r * inv_z2, .g = c2.g * inv_z2, .b = c2.b * inv_z2 };
 
     // Loop through bounding box with incremental evaluation
     var y: i32 = minY;
@@ -140,18 +151,27 @@ pub inline fn rasterizeTriangle(
             if (w0 >= 0 and w1 >= 0 and w2 >= 0) {
 
                 // Barycentric coordinates
+                const bc0 = w0 * inv_area;
                 const bc1 = w1 * inv_area;
                 const bc2 = w2 * inv_area;
 
                 // Interpolate depth
-                const inv_z = 1 / v0.z + bc1 * Az + bc2 * Bz;
+                const inv_z = inv_z0 + bc1 * Az + bc2 * Bz;
                 const z = 1.0 / inv_z;
 
                 const index = @as(usize, @intCast(@as(u32, @intCast(y)) * self.screen_width + @as(u32, @intCast(x))));
 
                 if (z < self.zbuffer[index]) {
                     self.zbuffer[index] = z;
-                    framebuffer[index] = color_packed;
+
+                    // Interpolate color/z in screen space, then multiply by z
+                    const final_color = g.Color{
+                        .r = (c0_over_z.r * bc0 + c1_over_z.r * bc1 + c2_over_z.r * bc2) * z,
+                        .g = (c0_over_z.g * bc0 + c1_over_z.g * bc1 + c2_over_z.g * bc2) * z,
+                        .b = (c0_over_z.b * bc0 + c1_over_z.b * bc1 + c2_over_z.b * bc2) * z,
+                    };
+
+                    framebuffer[index] = final_color.toPacked();
                 }
             }
 
@@ -169,6 +189,6 @@ pub inline fn rasterizeTriangle(
 }
 
 pub fn clearBuffers(self: Rasterizer, framebuffer: [*]u32) void {
-    @memset(framebuffer[0..(self.screen_width * self.screen_height)], BG_COLOR);
+    @memset(framebuffer[0..(self.screen_width * self.screen_height)], BG_COLOR.toPacked());
     @memset(self.zbuffer, 999999.0);
 }

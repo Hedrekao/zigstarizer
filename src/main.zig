@@ -14,6 +14,10 @@ const SCREEN_HEIGHT = 640;
 const MOVE_SPEED = 15.0; // Units per second
 const ROTATE_SPEED = 1.0; // Radians per second
 
+const RED_COLOR = g.Color{.r = 255, .g = 0, .b = 0};
+const GREEN_COLOR = g.Color{.r = 0, .g = 255, .b = 0};
+const BLUE_COLOR = g.Color{.r = 0, .g = 0, .b = 255};
+
 const Model = struct {
     vertices: []const g.V3f,
     faces: []const g.Face,
@@ -44,6 +48,8 @@ pub fn main() !void {
         model.faces.len,
     });
 
+    const rainbow_mode = args.len > 2 and std.mem.eql(u8, args[2], "rainbow");
+
     _ = c.SDL_Init(c.SDL_INIT_VIDEO);
     defer c.SDL_Quit();
 
@@ -69,17 +75,28 @@ pub fn main() !void {
     var frame_count: u32 = 0;
     var fps_timer: u32 = 0;
 
-    // Pre-compute triangle colors
-    var triangle_colors = try allocator.alloc(u32, model.faces.len);
-    defer allocator.free(triangle_colors);
+    // Pre-compute vertex colors (3 colors per triangle)
+    var vertex_colors = try allocator.alloc(g.Color, model.faces.len * 3);
+    defer allocator.free(vertex_colors);
 
     for (model.faces, 0..) |face, i| {
-        const hash = (face.v1 *% 73) +% (face.v2 *% 151) +% (face.v3 *% 283);
-        const variation = @as(u8, @truncate(hash % 128));
-        const r: u8 = 0x20 + variation / 4;
-        const green: u8 = 0x80 + variation;
-        const b: u8 = 0x20 + variation / 6;
-        triangle_colors[i] = (@as(u32, r) << 16) | (@as(u32, green) << 8) | @as(u32, b);
+        if (rainbow_mode) {
+            vertex_colors[i * 3 + 0] = RED_COLOR;
+            vertex_colors[i * 3 + 1] = GREEN_COLOR;
+            vertex_colors[i * 3 + 2] = BLUE_COLOR;
+        } else {
+            const hash = (face.v1 *% 73) +% (face.v2 *% 151) +% (face.v3 *% 283);
+            const variation = @as(u8, @truncate(hash % 128));
+            const red: u8 = 0x20 + variation / 4;
+            const green: u8 = 0x80 + variation;
+            const blue: u8 = 0x20 + variation / 6;
+
+            const color = g.Color.fromU8(red, green, blue);
+            // All three vertices get the same color (flat shading)
+            vertex_colors[i * 3 + 0] = color;
+            vertex_colors[i * 3 + 1] = color;
+            vertex_colors[i * 3 + 2] = color;
+        }
     }
 
     while (running) {
@@ -165,7 +182,11 @@ pub fn main() !void {
                 // Skip triangles behind camera
                 if (v0_r.x < 0 or v1_r.x < 0 or v2_r.x < 0) continue;
 
-                rasterizer.rasterizeTriangle(framebuffer, v0_r, v1_r, v2_r, triangle_colors[i]);
+                const c0 = vertex_colors[i * 3 + 0];
+                const c1 = vertex_colors[i * 3 + 1];
+                const c2 = vertex_colors[i * 3 + 2];
+
+                rasterizer.rasterizeTriangle(framebuffer, v0_r, v1_r, v2_r, c0, c1, c2);
             }
 
             c.SDL_UnlockSurface(screen);

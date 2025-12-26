@@ -44,6 +44,27 @@ pub const V3f = struct {
     }
 };
 
+pub const Color = struct {
+    r: f32,
+    g: f32,
+    b: f32,
+
+    pub inline fn fromU8(red: u8, green: u8, blue: u8) Color {
+        return .{
+            .r = @floatFromInt(red),
+            .g = @floatFromInt(green),
+            .b = @floatFromInt(blue),
+        };
+    }
+
+    pub inline fn toPacked(self: Color) u32 {
+        const red: u32 = @intFromFloat(@min(255.0, @max(0.0, self.r)));
+        const green: u32 = @intFromFloat(@min(255.0, @max(0.0, self.g)));
+        const blue: u32 = @intFromFloat(@min(255.0, @max(0.0, self.b)));
+        return (red << 16) | (green << 8) | blue;
+    }
+};
+
 pub const V2f = struct {
     x: f32,
     y: f32,
@@ -56,4 +77,3 @@ pub fn min3(a: f32, b: f32, c: f32) f32 {
 pub fn max3(a: f32, b: f32, c: f32) f32 {
     return @max(@max(a, b), c);
 }
-
