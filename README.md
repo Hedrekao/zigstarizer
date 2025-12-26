@@ -11,9 +11,23 @@ Tricks I learned so far:
 - triangle bounding box
 
 ### How it looks so far
+#### The christmas demo
 https://github.com/user-attachments/assets/9c356bde-8014-4363-b64b-08fd2b31e32b
 
-To run the demo simply run (it will generate both asset code and run demo):
-`zig build run` -> developed with zig version 0.15.2
+#### The COW demo
+
+
+
+You can either run obj2zig to manually translate obj file to zig one using
+
+`zig build obj2zig -- <input_path> <output_path>`
+
+To run one of the demos simply run (it will generate automatically required asset code and run demo):
+
+`zig build run -- <name of model> <--rainbow>`, fx `zig build run -- cow --rainbow`
+
+--rainbow flag will result in all triangles having one vertex red, one green, one blue
+
+(developed with zig version 0.15.2)
 
 

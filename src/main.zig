@@ -48,7 +48,7 @@ pub fn main() !void {
         model.faces.len,
     });
 
-    const rainbow_mode = args.len > 2 and std.mem.eql(u8, args[2], "rainbow");
+    const rainbow_mode = args.len > 2 and std.mem.eql(u8, args[2], "--rainbow");
 
     _ = c.SDL_Init(c.SDL_INIT_VIDEO);
     defer c.SDL_Quit();
