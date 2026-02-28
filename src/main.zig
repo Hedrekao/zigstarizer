@@ -11,17 +11,14 @@ const c = @cImport(
 const SCREEN_WIDTH = 960;
 const SCREEN_HEIGHT = 640;
 
+const NUM_THREADS = 8;
+
 const MOVE_SPEED = 15.0; // Units per second
 const ROTATE_SPEED = 1.0; // Radians per second
 
-const RED_COLOR = g.Color{.r = 255, .g = 0, .b = 0};
-const GREEN_COLOR = g.Color{.r = 0, .g = 255, .b = 0};
-const BLUE_COLOR = g.Color{.r = 0, .g = 0, .b = 255};
-
-const Model = struct {
-    vertices: []const g.V3f,
-    faces: []const g.Face,
-};
+const RED_COLOR = g.Color{ .r = 255, .g = 0, .b = 0 };
+const GREEN_COLOR = g.Color{ .r = 0, .g = 255, .b = 0 };
+const BLUE_COLOR = g.Color{ .r = 0, .g = 0, .b = 255 };
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -33,7 +30,7 @@ pub fn main() !void {
 
     const model_name = if (args.len > 1) args[1] else "xtree";
 
-    const model: Model = if (std.mem.eql(u8, model_name, "cow"))
+    const model: g.Model = if (std.mem.eql(u8, model_name, "cow"))
         .{ .vertices = &cow.vertices, .faces = &cow.faces }
     else if (std.mem.eql(u8, model_name, "xtree"))
         .{ .vertices = &xtree.vertices, .faces = &xtree.faces }
@@ -49,31 +46,6 @@ pub fn main() !void {
     });
 
     const rainbow_mode = args.len > 2 and std.mem.eql(u8, args[2], "--rainbow");
-
-    _ = c.SDL_Init(c.SDL_INIT_VIDEO);
-    defer c.SDL_Quit();
-
-    var rasterizer = try Rasterizer.init(allocator, SCREEN_WIDTH, SCREEN_HEIGHT);
-    defer rasterizer.deinit();
-
-    var camera = Camera.init();
-    camera.position = .{ .x = 0, .y = 10, .z = 40 };
-
-    const window = c.SDL_CreateWindow("3D Tree Rasterizer", 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0);
-    defer c.SDL_DestroyWindow(window);
-
-    const screen = c.SDL_GetWindowSurface(window);
-
-    var running = true;
-    var event: c.SDL_Event = undefined;
-
-    const keyboard_state = c.SDL_GetKeyboardState(null);
-
-    var last_time = c.SDL_GetTicks();
-
-    // FPS tracking
-    var frame_count: u32 = 0;
-    var fps_timer: u32 = 0;
 
     // Pre-compute vertex colors (3 colors per triangle)
     var vertex_colors = try allocator.alloc(g.Color, model.faces.len * 3);
@@ -98,6 +70,33 @@ pub fn main() !void {
             vertex_colors[i * 3 + 2] = color;
         }
     }
+
+    _ = c.SDL_Init(c.SDL_INIT_VIDEO);
+    defer c.SDL_Quit();
+    var camera = Camera.init();
+    camera.position = .{ .x = 0, .y = 10, .z = 40 };
+
+    var rasterizer = try Rasterizer.init(allocator, SCREEN_WIDTH, SCREEN_HEIGHT, NUM_THREADS, &model, vertex_colors);
+    defer rasterizer.deinit();
+
+    try rasterizer.startThreads();
+
+    const window = c.SDL_CreateWindow("3D Tree Rasterizer", 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0);
+    defer c.SDL_DestroyWindow(window);
+
+    const screen = c.SDL_GetWindowSurface(window);
+
+    var running = true;
+    var event: c.SDL_Event = undefined;
+
+    const keyboard_state = c.SDL_GetKeyboardState(null);
+
+    var last_time = c.SDL_GetTicks();
+
+    // FPS tracking
+    var frame_count: u32 = 0;
+    var fps_timer: u32 = 0;
+
 
     while (running) {
         const current_time = c.SDL_GetTicks();
@@ -170,24 +169,11 @@ pub fn main() !void {
 
             rasterizer.clearBuffers(framebuffer);
 
-            for (model.faces, 0..) |face, i| {
-                const v0_w = model.vertices[face.v1];
-                const v1_w = model.vertices[face.v2];
-                const v2_w = model.vertices[face.v3];
+            // Project all vertices once (cached for binning and rasterization)
+            rasterizer.projectAllVertices(&camera);
 
-                const v0_r = rasterizer.projectVertex(v0_w, camera);
-                const v1_r = rasterizer.projectVertex(v1_w, camera);
-                const v2_r = rasterizer.projectVertex(v2_w, camera);
-
-                // Skip triangles behind camera
-                if (v0_r.x < 0 or v1_r.x < 0 or v2_r.x < 0) continue;
-
-                const c0 = vertex_colors[i * 3 + 0];
-                const c1 = vertex_colors[i * 3 + 1];
-                const c2 = vertex_colors[i * 3 + 2];
-
-                rasterizer.rasterizeTriangle(framebuffer, v0_r, v1_r, v2_r, c0, c1, c2);
-            }
+            try rasterizer.binFacesParallel();
+            try rasterizer.rasterizeParallel(framebuffer);
 
             c.SDL_UnlockSurface(screen);
             _ = c.SDL_UpdateWindowSurface(window);

@@ -6,22 +6,259 @@ const BG_COLOR = g.Color{ .r = 32, .g = 32, .b = 32 };
 
 const Rasterizer = @This();
 
+// work phases for threads
+const WorkPhase = enum(u32) {
+    idle = 0,
+    binning = 1,
+    rasterizing = 2,
+    shutdown = 3,
+};
+
 zbuffer: []f32,
 screen_width: u32,
 screen_height: u32,
 allocator: std.mem.Allocator,
 
-pub fn init(allocator: std.mem.Allocator, screen_width: u32, screen_height: u32) !Rasterizer {
-    return .{
+threads: []std.Thread,
+num_threads: u32,
+global_bins: []std.ArrayList(usize), // One bin list per thread, storing indices of faces
+
+// Cached projected vertices (reused each frame)
+projected_vertices: []g.V3f,
+
+// Pre-allocated local bins for binning phase (num_threads * num_threads)
+// Each thread gets num_threads bins (one per stripe)
+local_bins: []std.ArrayList(usize),
+
+// Thread pool synchronization
+work_phase: std.atomic.Value(u32),
+threads_completed: std.atomic.Value(u32),
+work_generation: std.atomic.Value(u32), // Incremented each time new work is available
+
+// Shared work context
+model: *const g.Model,
+framebuffer: ?[*]u32,
+vertex_colors: []g.Color,
+
+// Track if threads have been started
+threads_started: bool,
+
+pub fn init(allocator: std.mem.Allocator, screen_width: u32, screen_height: u32, num_threads: u32, model: *const g.Model, vertex_colors: []g.Color) !Rasterizer {
+    const global_bins = try allocator.alloc(std.ArrayList(usize), num_threads);
+    for (global_bins) |*bin| {
+        bin.* = .empty;
+    }
+
+    // Pre-allocate local bins: each thread gets num_threads bins (one per stripe)
+    const local_bins = try allocator.alloc(std.ArrayList(usize), num_threads * num_threads);
+    for (local_bins) |*bin| {
+        bin.* = .empty;
+    }
+
+    const threads = try allocator.alloc(std.Thread, num_threads);
+
+    return Rasterizer{
         .allocator = allocator,
         .screen_width = screen_width,
         .screen_height = screen_height,
         .zbuffer = try allocator.alloc(f32, screen_width * screen_height),
+        .threads = threads,
+        .num_threads = num_threads,
+        .global_bins = global_bins,
+        .projected_vertices = try allocator.alloc(g.V3f, model.vertices.len),
+        .local_bins = local_bins,
+        .work_phase = std.atomic.Value(u32).init(@intFromEnum(WorkPhase.idle)),
+        .threads_completed = std.atomic.Value(u32).init(0),
+        .work_generation = std.atomic.Value(u32).init(0),
+        .model = model,
+        .vertex_colors = vertex_colors,
+        .framebuffer = null,
+        .threads_started = false,
     };
 }
 
-pub fn deinit(self: Rasterizer) void {
+pub fn startThreads(self: *Rasterizer) !void {
+    if (self.threads_started) return;
+
+    for (0..self.num_threads) |i| {
+        self.threads[i] = std.Thread.spawn(.{}, workerThread, .{ self, i }) catch {
+            std.debug.print("Failed to spawn worker thread {d}\n", .{i});
+            return error.ThreadSpawnFailed;
+        };
+    }
+    self.threads_started = true;
+}
+
+pub fn deinit(self: *Rasterizer) void {
+    // Only shutdown threads if they were started
+    if (self.threads_started) {
+        self.work_phase.store(@intFromEnum(WorkPhase.shutdown), .release);
+
+        _ = self.work_generation.fetchAdd(1, .release);
+
+        // Join all threads
+        for (self.threads) |thread| {
+            thread.join();
+        }
+    }
+
     self.allocator.free(self.zbuffer);
+    self.allocator.free(self.threads);
+    self.allocator.free(self.projected_vertices);
+
+    for (self.global_bins) |*bin| {
+        bin.deinit(self.allocator);
+    }
+    self.allocator.free(self.global_bins);
+
+    for (self.local_bins) |*bin| {
+        bin.deinit(self.allocator);
+    }
+    self.allocator.free(self.local_bins);
+}
+
+fn workerThread(self: *Rasterizer, thread_index: usize) void {
+    var last_generation: u32 = 0;
+
+    while (true) {
+        var current_generation = self.work_generation.load(.acquire);
+        while (current_generation == last_generation) {
+            std.atomic.spinLoopHint();
+            current_generation = self.work_generation.load(.acquire);
+        }
+        last_generation = current_generation;
+
+        const phase: WorkPhase = @enumFromInt(self.work_phase.load(.acquire));
+
+        switch (phase) {
+            .shutdown => return,
+            .binning => {
+                self.binFacesWorker(thread_index);
+            },
+            .rasterizing => {
+                self.rasterizeStripeWorker(thread_index);
+            },
+            .idle => {},
+        }
+
+        _ = self.threads_completed.fetchAdd(1, .release);
+    }
+}
+
+pub fn projectAllVertices(self: *Rasterizer, camera: *const Camera) void {
+    for (self.model.vertices, 0..) |vertex, i| {
+        self.projected_vertices[i] = self.projectVertex(vertex, camera.*);
+    }
+}
+
+fn waitForThreads(self: *Rasterizer) void {
+    while (self.threads_completed.load(.acquire) < self.num_threads) {
+        std.atomic.spinLoopHint();
+    }
+}
+
+fn dispatchWork(self: *Rasterizer, phase: WorkPhase) void {
+    self.threads_completed.store(0, .release);
+
+    self.work_phase.store(@intFromEnum(phase), .release);
+
+    // Increment generation to wake threads
+    _ = self.work_generation.fetchAdd(1, .release);
+}
+
+pub fn binFacesParallel(self: *Rasterizer) !void {
+    for (self.global_bins) |*bin| {
+        bin.clearRetainingCapacity();
+    }
+
+    for (self.local_bins) |*bin| {
+        bin.clearRetainingCapacity();
+    }
+
+    self.dispatchWork(.binning);
+
+    self.waitForThreads();
+
+    for (self.local_bins, 0..) |bin, i| {
+        const global_idx: usize = @mod(i, self.num_threads);
+        for (bin.items) |face_index| {
+            try self.global_bins[global_idx].append(self.allocator, face_index);
+        }
+    }
+}
+
+fn binFacesWorker(self: *Rasterizer, thread_index: usize) void {
+    const stripe_height: f32 = @floatFromInt(self.screen_height / self.num_threads);
+    const model = self.model;
+    const local_bins = self.local_bins[thread_index * self.num_threads .. (thread_index + 1) * self.num_threads];
+
+    const faces_per_thread = model.faces.len / self.num_threads;
+    const start_face = thread_index * faces_per_thread;
+    const end_face = if (thread_index == self.num_threads - 1) model.faces.len else (thread_index + 1) * faces_per_thread;
+    const faces = model.faces[start_face..end_face];
+
+    for (faces, 0..) |face, i| {
+        const v0 = self.projected_vertices[face.v1];
+        const v1 = self.projected_vertices[face.v2];
+        const v2 = self.projected_vertices[face.v3];
+
+        if (v0.x < 0 or v1.x < 0 or v2.x < 0) continue;
+
+        const min_y = g.min3(v0.y, v1.y, v2.y);
+        const max_y = g.max3(v0.y, v1.y, v2.y);
+
+        // Skip triangles completely off-screen or with invalid coordinates
+        if (max_y < 0 or min_y >= @as(f32, @floatFromInt(self.screen_height))) continue;
+
+        // Clamp to screen bounds to prevent out-of-bounds access
+        const clamped_min_y = @max(0.0, min_y);
+        const clamped_max_y = @min(@as(f32, @floatFromInt(self.screen_height - 1)), max_y);
+
+        const min_stripe = @as(usize, @intFromFloat(@floor(clamped_min_y / stripe_height)));
+        const max_stripe = @min(self.num_threads - 1, @as(usize, @intFromFloat(@floor(clamped_max_y / stripe_height))));
+
+        for (min_stripe..max_stripe + 1) |stripe| {
+            local_bins[stripe].append(self.allocator, start_face + i) catch continue;
+        }
+    }
+}
+
+pub fn rasterizeParallel(self: *Rasterizer, framebuffer: [*]u32) !void {
+    self.framebuffer = framebuffer;
+
+    self.dispatchWork(.rasterizing);
+
+    self.waitForThreads();
+}
+
+fn rasterizeStripeWorker(self: *Rasterizer, thread_index: usize) void {
+    const model = self.model;
+    const framebuffer = self.framebuffer.?;
+    const vertex_colors = self.vertex_colors;
+    const bin = self.global_bins[thread_index];
+    const stripe_height = self.screen_height / self.num_threads;
+    const min_y = thread_index * stripe_height;
+    const max_y = if (thread_index == self.num_threads - 1)
+        self.screen_height
+    else
+        min_y + stripe_height;
+
+    for (bin.items) |face_index| {
+        const face = model.faces[face_index];
+
+        const v0_r = self.projected_vertices[face.v1];
+        const v1_r = self.projected_vertices[face.v2];
+        const v2_r = self.projected_vertices[face.v3];
+
+        // Skip triangles with invalid projection (behind camera)
+        if (v0_r.x < 0 or v1_r.x < 0 or v2_r.x < 0) continue;
+
+        const c0 = vertex_colors[face_index * 3 + 0];
+        const c1 = vertex_colors[face_index * 3 + 1];
+        const c2 = vertex_colors[face_index * 3 + 2];
+
+        self.rasterizeTriangle(framebuffer, v0_r, v1_r, v2_r, c0, c1, c2, min_y, max_y);
+    }
 }
 
 pub inline fn projectVertex(self: Rasterizer, v: g.V3f, camera: Camera) g.V3f {
@@ -67,7 +304,12 @@ pub inline fn rasterizeTriangle(
     c0: g.Color,
     c1: g.Color,
     c2: g.Color,
+    min_y_stripe: usize,
+    max_y_stripe: usize,
 ) void {
+    // Skip triangles with very small or zero depth (too close to camera)
+    const min_depth = 0.001;
+    if (v0.z < min_depth or v1.z < min_depth or v2.z < min_depth) return;
 
     // Compute triangle area using edge function
     const area = (v2.x - v0.x) * (v1.y - v0.y) - (v2.y - v0.y) * (v1.x - v0.x);
@@ -78,15 +320,10 @@ pub inline fn rasterizeTriangle(
     const inv_area = 1.0 / area;
 
     // Calculate bounding box of triangle
-    const minX = @max(0, @as(i32, @intFromFloat(g.min3(v0.x, v1.x, v2.x))));
-    const minY = @max(0, @as(i32, @intFromFloat(g.min3(v0.y, v1.y, v2.y))));
-    const maxX = @min(@as(i32, @intCast(self.screen_width - 1)), @as(i32, @intFromFloat(g.max3(v0.x, v1.x, v2.x))));
-    const maxY = @min(@as(i32, @intCast(self.screen_height - 1)), @as(i32, @intFromFloat(g.max3(v0.y, v1.y, v2.y))));
-
-    // Early rejection: triangle completely outside screen
-    const max_x_screen = @as(i32, @intCast(self.screen_width - 1));
-    const max_y_screen = @as(i32, @intCast(self.screen_height - 1));
-    if (minX > max_x_screen or maxX < 0 or minY > max_y_screen or maxY < 0) return;
+    const min_x = @max(0, @as(i32, @intFromFloat(g.min3(v0.x, v1.x, v2.x))));
+    const min_y = @max(@as(i32, @intCast(min_y_stripe)), @max(0, @as(i32, @intFromFloat(g.min3(v0.y, v1.y, v2.y)))));
+    const max_x = @min(@as(i32, @intCast(self.screen_width - 1)), @as(i32, @intFromFloat(g.max3(v0.x, v1.x, v2.x))));
+    const max_y = @min(@as(i32, @intCast(max_y_stripe - 1)), @min(@as(i32, @intCast(self.screen_height - 1)), @as(i32, @intFromFloat(g.max3(v0.y, v1.y, v2.y)))));
 
     // Precompute edge equation coefficients for incremental evaluation
     // Edge equation: E(x,y) = (x - x0) * (y1 - y0) - (y - y0) * (x1 - x0)
@@ -109,8 +346,8 @@ pub inline fn rasterizeTriangle(
     const C2 = v0.y * v1.x - v0.x * v1.y;
 
     // Starting point (top-left of bounding box, pixel center)
-    const start_x = @as(f32, @floatFromInt(minX)) + 0.5;
-    const start_y = @as(f32, @floatFromInt(minY)) + 0.5;
+    const start_x = @as(f32, @floatFromInt(min_x)) + 0.5;
+    const start_y = @as(f32, @floatFromInt(min_y)) + 0.5;
 
     // edge function at starting point
     var w0_row = A0 * start_x + B0 * start_y + C0;
@@ -137,15 +374,15 @@ pub inline fn rasterizeTriangle(
     const c2_over_z = g.Color{ .r = c2.r * inv_z2, .g = c2.g * inv_z2, .b = c2.b * inv_z2 };
 
     // Loop through bounding box with incremental evaluation
-    var y: i32 = minY;
-    while (y <= maxY) : (y += 1) {
+    var y: i32 = min_y;
+    while (y <= max_y) : (y += 1) {
         // Reset edge values for this row
         var w0 = w0_row;
         var w1 = w1_row;
         var w2 = w2_row;
 
-        var x: i32 = minX;
-        while (x <= maxX) : (x += 1) {
+        var x: i32 = min_x;
+        while (x <= max_x) : (x += 1) {
 
             // Check if inside triangle
             if (w0 >= 0 and w1 >= 0 and w2 >= 0) {

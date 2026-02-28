@@ -1,3 +1,8 @@
+pub const Model = struct {
+    vertices: []const V3f,
+    faces: []const Face,
+};
+
 pub const Face = struct {
     v1: u32,
     v2: u32,
