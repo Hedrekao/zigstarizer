@@ -1,8 +1,6 @@
 const std = @import("std");
 const g = @import("geometry");
-const xtree = @import("xtree");
-const cow = @import("cow");
-const pokeball = @import("pokeball");
+const models = @import("model_registry");
 const Rasterizer = @import("rasterizer.zig");
 const Camera = @import("camera.zig");
 const c = @cImport(
@@ -31,14 +29,8 @@ pub fn main() !void {
 
     const model_name = if (args.len > 1) args[1] else "xtree";
 
-    const model: g.Model = if (std.mem.eql(u8, model_name, "cow"))
-        .{ .vertices = &cow.vertices, .faces = &cow.faces }
-    else if (std.mem.eql(u8, model_name, "xtree"))
-        .{ .vertices = &xtree.vertices, .faces = &xtree.faces }
-    else if (std.mem.eql(u8, model_name, "pokeball"))
-        .{ .vertices = &pokeball.vertices, .faces = &pokeball.faces }
-    else {
-        std.debug.print("Unknown model: {s}\nAvailable: xtree, cow\n", .{model_name});
+    const model = models.getModel(model_name) orelse {
+        std.debug.print("Unknown model: {s}\nAvailable models: {s}\n", .{ model_name, models.available });
         return error.InvalidModel;
     };
 
@@ -100,7 +92,6 @@ pub fn main() !void {
     // FPS tracking
     var frame_count: u32 = 0;
     var fps_timer: u32 = 0;
-
 
     while (running) {
         const current_time = c.SDL_GetTicks();
