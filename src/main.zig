@@ -2,6 +2,7 @@ const std = @import("std");
 const g = @import("geometry");
 const xtree = @import("xtree");
 const cow = @import("cow");
+const pokeball = @import("pokeball");
 const Rasterizer = @import("rasterizer.zig");
 const Camera = @import("camera.zig");
 const c = @cImport(
@@ -34,6 +35,8 @@ pub fn main() !void {
         .{ .vertices = &cow.vertices, .faces = &cow.faces }
     else if (std.mem.eql(u8, model_name, "xtree"))
         .{ .vertices = &xtree.vertices, .faces = &xtree.faces }
+    else if (std.mem.eql(u8, model_name, "pokeball"))
+        .{ .vertices = &pokeball.vertices, .faces = &pokeball.faces }
     else {
         std.debug.print("Unknown model: {s}\nAvailable: xtree, cow\n", .{model_name});
         return error.InvalidModel;
@@ -57,7 +60,8 @@ pub fn main() !void {
             vertex_colors[i * 3 + 1] = GREEN_COLOR;
             vertex_colors[i * 3 + 2] = BLUE_COLOR;
         } else {
-            const hash = (face.v1 *% 73) +% (face.v2 *% 151) +% (face.v3 *% 283);
+            const vertex_indices = face.vertex_indices;
+            const hash = (vertex_indices[0] *% 73) +% (vertex_indices[1] *% 151) +% (vertex_indices[2] *% 283);
             const variation = @as(u8, @truncate(hash % 128));
             const red: u8 = 0x20 + variation / 4;
             const green: u8 = 0x80 + variation;

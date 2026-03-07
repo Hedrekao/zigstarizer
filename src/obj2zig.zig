@@ -47,20 +47,31 @@ pub fn main() !void {
 
             try vertices.append(allocator, g.V3f{ .x = x, .y = y, .z = z });
         } else if (std.mem.eql(u8, indicator, "f")) {
-            var face: g.Face = undefined;
-            for (0..3) |i| {
-                const face_part = parts.next().?;
+            var vertex_indices: [4]u32 = undefined;
+            var vertex_count: usize = 0;
+
+            while (parts.next()) |face_part| {
+                if (vertex_count >= 4) break; // Only support triangles and quads
                 var face_iter = std.mem.splitScalar(u8, face_part, '/');
                 const vertex_index = try std.fmt.parseInt(u32, face_iter.next().?, 10) - 1;
-                switch (i) {
-                    0 => face.v1 = vertex_index,
-                    1 => face.v2 = vertex_index,
-                    2 => face.v3 = vertex_index,
-                    else => unreachable,
-                }
+                vertex_indices[vertex_count] = vertex_index;
+                vertex_count += 1;
             }
 
-            try faces.append(allocator, face);
+            if (vertex_count == 3) {
+                // Triangle: v0, v1, v2
+                try faces.append(allocator, g.Face{
+                    .vertex_indices = .{ vertex_indices[0], vertex_indices[1], vertex_indices[2] },
+                });
+            } else if (vertex_count == 4) {
+                // Quad: split into two triangles (v0, v1, v2) and (v0, v2, v3)
+                try faces.append(allocator, g.Face{
+                    .vertex_indices = .{ vertex_indices[0], vertex_indices[1], vertex_indices[2] },
+                });
+                try faces.append(allocator, g.Face{
+                    .vertex_indices = .{ vertex_indices[0], vertex_indices[2], vertex_indices[3] },
+                });
+            }
         }
     }
 
@@ -87,7 +98,8 @@ pub fn main() !void {
 
     try writer.print("pub const faces = [_]g.Face{{\n", .{});
     for (faces.items) |f| {
-        try writer.print("    .{{ .v1 = {}, .v2 = {}, .v3 = {} }},\n", .{ f.v1, f.v2, f.v3 });
+        const v = f.vertex_indices;
+        try writer.print("    .{{ .vertex_indices = .{{ {}, {}, {} }} }},\n", .{ v[0], v[1], v[2] });
     }
     try writer.print("}};\n", .{});
 

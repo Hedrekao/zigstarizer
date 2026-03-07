@@ -23,7 +23,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    const model_names = [_][]const u8{ "xtree", "cow" };
+    const model_names = [_][]const u8{ "xtree", "cow", "pokeball" };
     var model_modules: [model_names.len]*std.Build.Module = undefined;
 
     inline for (model_names, 0..) |model_name, i| {
@@ -60,6 +60,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "geometry", .module = g_mod },
             .{ .name = "xtree", .module = model_modules[0] },
             .{ .name = "cow", .module = model_modules[1] },
+            .{ .name = "pokeball", .module = model_modules[2] },
         },
     });
 

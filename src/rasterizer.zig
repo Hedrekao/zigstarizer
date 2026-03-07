@@ -198,9 +198,9 @@ fn binFacesWorker(self: *Rasterizer, thread_index: usize) void {
     const faces = model.faces[start_face..end_face];
 
     for (faces, 0..) |face, i| {
-        const v0 = self.projected_vertices[face.v1];
-        const v1 = self.projected_vertices[face.v2];
-        const v2 = self.projected_vertices[face.v3];
+        const v0 = self.projected_vertices[face.vertex_indices[0]];
+        const v1 = self.projected_vertices[face.vertex_indices[1]];
+        const v2 = self.projected_vertices[face.vertex_indices[2]];
 
         if (v0.x < 0 or v1.x < 0 or v2.x < 0) continue;
 
@@ -246,9 +246,9 @@ fn rasterizeStripeWorker(self: *Rasterizer, thread_index: usize) void {
     for (bin.items) |face_index| {
         const face = model.faces[face_index];
 
-        const v0_r = self.projected_vertices[face.v1];
-        const v1_r = self.projected_vertices[face.v2];
-        const v2_r = self.projected_vertices[face.v3];
+        const v0_r = self.projected_vertices[face.vertex_indices[0]];
+        const v1_r = self.projected_vertices[face.vertex_indices[1]];
+        const v2_r = self.projected_vertices[face.vertex_indices[2]];
 
         // Skip triangles with invalid projection (behind camera)
         if (v0_r.x < 0 or v1_r.x < 0 or v2_r.x < 0) continue;

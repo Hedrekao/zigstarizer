@@ -4,9 +4,7 @@ pub const Model = struct {
 };
 
 pub const Face = struct {
-    v1: u32,
-    v2: u32,
-    v3: u32,
+    vertex_indices: [3]u32,
 };
 
 pub const V3f = struct {
