@@ -15,7 +15,7 @@ fn generateModelRegistry(b: *std.Build, model_names: []const []const u8) []const
     const getmodel_writer = getmodel_fbs.writer();
     for (model_names) |name| {
         getmodel_writer.print("    if (std.mem.eql(u8, name, \"{s}\"))\n", .{name}) catch unreachable;
-        getmodel_writer.print("        return .{{ .vertices = &{s}.vertices, .faces = &{s}.faces }};\n", .{ name, name }) catch unreachable;
+        getmodel_writer.print("        return .{{ .vertices = &{s}.vertices, .faces = &{s}.faces, .texcoords = &{s}.texcoords }};\n", .{ name, name, name }) catch unreachable;
     }
 
     // Build available models list

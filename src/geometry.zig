@@ -1,10 +1,12 @@
 pub const Model = struct {
     vertices: []const V3f,
+    texcoords: []const V2f = &.{},
     faces: []const Face,
 };
 
 pub const Face = struct {
     vertex_indices: [3]u32,
+    texcoord_indices: ?[3]u32 = null,
 };
 
 pub const V3f = struct {

@@ -26,6 +26,9 @@ pub fn main() !void {
     var vertices = std.ArrayList(g.V3f).empty;
     defer vertices.deinit(allocator);
 
+    var texcoords = std.ArrayList(g.V2f).empty;
+    defer texcoords.deinit(allocator);
+
     const read_buf = try allocator.alloc(u8, 1024);
     defer allocator.free(read_buf);
 
@@ -46,8 +49,14 @@ pub fn main() !void {
             if (x == -0.0) x = 0.0;
 
             try vertices.append(allocator, g.V3f{ .x = x, .y = y, .z = z });
+        } else if (std.mem.eql(u8, indicator, "vt")) {
+            const u = try std.fmt.parseFloat(f32, parts.next().?);
+            const v = try std.fmt.parseFloat(f32, parts.next().?);
+
+            try texcoords.append(allocator, g.V2f{ .x = u, .y = v });
         } else if (std.mem.eql(u8, indicator, "f")) {
             var vertex_indices: [4]u32 = undefined;
+            var texcoord_indices: [4]u32 = undefined;
             var vertex_count: usize = 0;
 
             while (parts.next()) |face_part| {
@@ -56,21 +65,37 @@ pub fn main() !void {
                 const vertex_index = try std.fmt.parseInt(u32, face_iter.next().?, 10) - 1;
                 vertex_indices[vertex_count] = vertex_index;
                 vertex_count += 1;
+
+                if (face_iter.next()) |texcoord_part| {
+                    const texcoord_index = try std.fmt.parseInt(u32, texcoord_part, 10) - 1;
+                    texcoord_indices[vertex_count - 1] = texcoord_index;
+                }
             }
 
             if (vertex_count == 3) {
                 // Triangle: v0, v1, v2
-                try faces.append(allocator, g.Face{
+                var face = g.Face{
                     .vertex_indices = .{ vertex_indices[0], vertex_indices[1], vertex_indices[2] },
-                });
+                };
+                if (texcoord_indices[0] != 0) {
+                    face.texcoord_indices = .{ texcoord_indices[0], texcoord_indices[1], texcoord_indices[2] };
+                }
+                try faces.append(allocator, face);
             } else if (vertex_count == 4) {
                 // Quad: split into two triangles (v0, v1, v2) and (v0, v2, v3)
-                try faces.append(allocator, g.Face{
+                var face1 = g.Face{
                     .vertex_indices = .{ vertex_indices[0], vertex_indices[1], vertex_indices[2] },
-                });
-                try faces.append(allocator, g.Face{
+                };
+                var face2 = g.Face{
                     .vertex_indices = .{ vertex_indices[0], vertex_indices[2], vertex_indices[3] },
-                });
+                };
+
+                if (texcoord_indices[0] != 0) {
+                    face1.texcoord_indices = .{ texcoord_indices[0], texcoord_indices[1], texcoord_indices[2] };
+                    face2.texcoord_indices = .{ texcoord_indices[0], texcoord_indices[2], texcoord_indices[3] };
+                }
+                try faces.append(allocator, face1);
+                try faces.append(allocator, face2);
             }
         }
     }
@@ -96,10 +121,22 @@ pub fn main() !void {
     }
     try writer.print("}};\n\n", .{});
 
+    try writer.print("pub const texcoords = [_]g.V2f{{\n", .{});
+    if (texcoords.items.len > 0) {
+        for (texcoords.items) |t| {
+            try writer.print("    .{{ .x = {}, .y = {} }},\n", .{ t.x, t.y });
+        }
+    }
+    try writer.print("}};\n\n", .{});
+
     try writer.print("pub const faces = [_]g.Face{{\n", .{});
     for (faces.items) |f| {
         const v = f.vertex_indices;
-        try writer.print("    .{{ .vertex_indices = .{{ {}, {}, {} }} }},\n", .{ v[0], v[1], v[2] });
+        try writer.print("    .{{ .vertex_indices = .{{ {}, {}, {} }}", .{ v[0], v[1], v[2] });
+        if (f.texcoord_indices) |t| {
+            try writer.print(", .texcoord_indices = .{{ {}, {}, {} }}", .{ t[0], t[1], t[2] });
+        }
+        try writer.print(" }},\n", .{});
     }
     try writer.print("}};\n", .{});
 
