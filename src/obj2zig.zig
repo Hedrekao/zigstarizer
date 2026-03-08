@@ -58,6 +58,7 @@ pub fn main() !void {
             var vertex_indices: [4]u32 = undefined;
             var texcoord_indices: [4]u32 = undefined;
             var vertex_count: usize = 0;
+            var has_texcoords = false;
 
             while (parts.next()) |face_part| {
                 if (vertex_count >= 4) break; // Only support triangles and quads
@@ -69,6 +70,7 @@ pub fn main() !void {
                 if (face_iter.next()) |texcoord_part| {
                     const texcoord_index = try std.fmt.parseInt(u32, texcoord_part, 10) - 1;
                     texcoord_indices[vertex_count - 1] = texcoord_index;
+                    has_texcoords = true;
                 }
             }
 
@@ -77,7 +79,7 @@ pub fn main() !void {
                 var face = g.Face{
                     .vertex_indices = .{ vertex_indices[0], vertex_indices[1], vertex_indices[2] },
                 };
-                if (texcoord_indices[0] != 0) {
+                if (has_texcoords) {
                     face.texcoord_indices = .{ texcoord_indices[0], texcoord_indices[1], texcoord_indices[2] };
                 }
                 try faces.append(allocator, face);
@@ -90,7 +92,7 @@ pub fn main() !void {
                     .vertex_indices = .{ vertex_indices[0], vertex_indices[2], vertex_indices[3] },
                 };
 
-                if (texcoord_indices[0] != 0) {
+                if (has_texcoords) {
                     face1.texcoord_indices = .{ texcoord_indices[0], texcoord_indices[1], texcoord_indices[2] };
                     face2.texcoord_indices = .{ texcoord_indices[0], texcoord_indices[2], texcoord_indices[3] };
                 }

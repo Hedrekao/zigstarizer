@@ -1,8 +1,12 @@
 const std = @import("std");
 const g = @import("geometry");
+const Texture = @import("texture.zig").Texture;
 const Camera = @import("camera.zig");
 
 const BG_COLOR = g.Color{ .r = 32, .g = 32, .b = 32 };
+const RED_COLOR = g.Color{ .r = 255, .g = 0, .b = 0 };
+const GREEN_COLOR = g.Color{ .r = 0, .g = 255, .b = 0 };
+const BLUE_COLOR = g.Color{ .r = 0, .g = 0, .b = 255 };
 
 const Rasterizer = @This();
 
@@ -12,6 +16,12 @@ const WorkPhase = enum(u32) {
     binning = 1,
     rasterizing = 2,
     shutdown = 3,
+};
+
+pub const ColorMode = enum {
+    green,
+    rainbow,
+    texture,
 };
 
 zbuffer: []f32,
@@ -38,12 +48,13 @@ work_generation: std.atomic.Value(u32), // Incremented each time new work is ava
 // Shared work context
 model: *const g.Model,
 framebuffer: ?[*]u32,
-vertex_colors: []g.Color,
+vertex_colors: ?[]g.Color,
+texture: ?*const Texture,
 
 // Track if threads have been started
 threads_started: bool,
 
-pub fn init(allocator: std.mem.Allocator, screen_width: u32, screen_height: u32, num_threads: u32, model: *const g.Model, vertex_colors: []g.Color) !Rasterizer {
+pub fn init(allocator: std.mem.Allocator, screen_width: u32, screen_height: u32, num_threads: u32, model: *const g.Model, color_mode: ColorMode) !Rasterizer {
     const global_bins = try allocator.alloc(std.ArrayList(usize), num_threads);
     for (global_bins) |*bin| {
         bin.* = .empty;
@@ -56,6 +67,43 @@ pub fn init(allocator: std.mem.Allocator, screen_width: u32, screen_height: u32,
     }
 
     const threads = try allocator.alloc(std.Thread, num_threads);
+
+    std.debug.print("Initializing rasterizer with model containing {d} vertices, {d} faces, and {d} texcoords\n", .{ model.vertices.len, model.faces.len, model.texcoords.len });
+
+    var vertex_colors: ?[]g.Color = null;
+    var texture: ?*const Texture = null;
+
+    switch (color_mode) {
+        .green, .rainbow => {
+            vertex_colors = try allocator.alloc(g.Color, model.faces.len * 3);
+            for (model.faces, 0..) |face, i| {
+                if (color_mode == .green) {
+                    const vertex_indices = face.vertex_indices;
+                    const hash = (vertex_indices[0] *% 73) +% (vertex_indices[1] *% 151) +% (vertex_indices[2] *% 283);
+                    const variation = @as(u8, @truncate(hash % 128));
+                    const red: u8 = 0x20 + variation / 4;
+                    const green: u8 = 0x80 + variation;
+                    const blue: u8 = 0x20 + variation / 6;
+
+                    const color = g.Color.fromU8(red, green, blue);
+                    // All three vertices get the same color (flat shading)
+                    vertex_colors.?[i * 3 + 0] = color;
+                    vertex_colors.?[i * 3 + 1] = color;
+                    vertex_colors.?[i * 3 + 2] = color;
+                } else {
+                    vertex_colors.?[i * 3 + 0] = RED_COLOR;
+                    vertex_colors.?[i * 3 + 1] = GREEN_COLOR;
+                    vertex_colors.?[i * 3 + 2] = BLUE_COLOR;
+                }
+            }
+        },
+        .texture => {
+            if (model.texcoords.len == 0) {
+                return error.TextureCoordinatesRequired;
+            }
+            texture = try Texture.initFromFilePinned(allocator, "assets/texture.jpeg");
+        },
+    }
 
     return Rasterizer{
         .allocator = allocator,
@@ -72,6 +120,7 @@ pub fn init(allocator: std.mem.Allocator, screen_width: u32, screen_height: u32,
         .work_generation = std.atomic.Value(u32).init(0),
         .model = model,
         .vertex_colors = vertex_colors,
+        .texture = texture,
         .framebuffer = null,
         .threads_started = false,
     };
@@ -115,6 +164,15 @@ pub fn deinit(self: *Rasterizer) void {
         bin.deinit(self.allocator);
     }
     self.allocator.free(self.local_bins);
+
+    if (self.vertex_colors) |colors| {
+        self.allocator.free(colors);
+    }
+
+    if (self.texture) |tex| {
+        tex.deinit();
+        self.allocator.destroy(tex);
+    }
 }
 
 fn workerThread(self: *Rasterizer, thread_index: usize) void {
@@ -246,18 +304,17 @@ fn rasterizeStripeWorker(self: *Rasterizer, thread_index: usize) void {
     for (bin.items) |face_index| {
         const face = model.faces[face_index];
 
-        const v0_r = self.projected_vertices[face.vertex_indices[0]];
-        const v1_r = self.projected_vertices[face.vertex_indices[1]];
-        const v2_r = self.projected_vertices[face.vertex_indices[2]];
+        var face_colors: ?[3]g.Color = null;
 
-        // Skip triangles with invalid projection (behind camera)
-        if (v0_r.x < 0 or v1_r.x < 0 or v2_r.x < 0) continue;
+        if (vertex_colors) |colors| {
+            face_colors = .{
+                colors[face_index * 3 + 0],
+                colors[face_index * 3 + 1],
+                colors[face_index * 3 + 2],
+            };
+        }
 
-        const c0 = vertex_colors[face_index * 3 + 0];
-        const c1 = vertex_colors[face_index * 3 + 1];
-        const c2 = vertex_colors[face_index * 3 + 2];
-
-        self.rasterizeTriangle(framebuffer, v0_r, v1_r, v2_r, c0, c1, c2, min_y, max_y);
+        self.rasterizeTriangle(framebuffer, face, face_colors, min_y, max_y);
     }
 }
 
@@ -298,15 +355,15 @@ pub inline fn projectVertex(self: Rasterizer, v: g.V3f, camera: Camera) g.V3f {
 pub inline fn rasterizeTriangle(
     self: Rasterizer,
     framebuffer: [*]u32,
-    v0: g.V3f,
-    v1: g.V3f,
-    v2: g.V3f,
-    c0: g.Color,
-    c1: g.Color,
-    c2: g.Color,
+    face: g.Face,
+    colors: ?[3]g.Color,
     min_y_stripe: usize,
     max_y_stripe: usize,
 ) void {
+    const v0 = self.projected_vertices[face.vertex_indices[0]];
+    const v1 = self.projected_vertices[face.vertex_indices[1]];
+    const v2 = self.projected_vertices[face.vertex_indices[2]];
+
     // Skip triangles with very small or zero depth (too close to camera)
     const min_depth = 0.001;
     if (v0.z < min_depth or v1.z < min_depth or v2.z < min_depth) return;
@@ -368,10 +425,43 @@ pub inline fn rasterizeTriangle(
     const Az = inv_z1 - inv_z0;
     const Bz = inv_z2 - inv_z0;
 
+    var c0_over_z: g.Color = undefined;
+    var c1_over_z: g.Color = undefined;
+    var c2_over_z: g.Color = undefined;
+
     // Perspective-correct attribute interpolation: multiply by 1/z before interpolating
-    const c0_over_z = g.Color{ .r = c0.r * inv_z0, .g = c0.g * inv_z0, .b = c0.b * inv_z0 };
-    const c1_over_z = g.Color{ .r = c1.r * inv_z1, .g = c1.g * inv_z1, .b = c1.b * inv_z1 };
-    const c2_over_z = g.Color{ .r = c2.r * inv_z2, .g = c2.g * inv_z2, .b = c2.b * inv_z2 };
+
+    if (colors) |face_colors| {
+        const c0 = face_colors[0];
+        const c1 = face_colors[1];
+        const c2 = face_colors[2];
+        c0_over_z = g.Color{ .r = c0.r * inv_z0, .g = c0.g * inv_z0, .b = c0.b * inv_z0 };
+        c1_over_z = g.Color{ .r = c1.r * inv_z1, .g = c1.g * inv_z1, .b = c1.b * inv_z1 };
+        c2_over_z = g.Color{ .r = c2.r * inv_z2, .g = c2.g * inv_z2, .b = c2.b * inv_z2 };
+    }
+
+    var uv0_over_z: g.V2f = undefined;
+    var uv1_over_z: g.V2f = undefined;
+    var uv2_over_z: g.V2f = undefined;
+
+    var uv0: ?g.V2f = null;
+    var uv1: ?g.V2f = null;
+    var uv2: ?g.V2f = null;
+
+    if (face.texcoord_indices) |t_idx| {
+        const texcoords = self.model.texcoords;
+        uv0 = texcoords[t_idx[0]];
+        uv1 = texcoords[t_idx[1]];
+        uv2 = texcoords[t_idx[2]];
+    }
+
+    const has_uvs = uv0 != null and uv1 != null and uv2 != null;
+
+    if (has_uvs) {
+        uv0_over_z = g.V2f{ .x = uv0.?.x * inv_z0, .y = uv0.?.y * inv_z0 };
+        uv1_over_z = g.V2f{ .x = uv1.?.x * inv_z1, .y = uv1.?.y * inv_z1 };
+        uv2_over_z = g.V2f{ .x = uv2.?.x * inv_z2, .y = uv2.?.y * inv_z2 };
+    }
 
     // Loop through bounding box with incremental evaluation
     var y: i32 = min_y;
@@ -401,12 +491,22 @@ pub inline fn rasterizeTriangle(
                 if (z < self.zbuffer[index]) {
                     self.zbuffer[index] = z;
 
-                    // Interpolate color/z in screen space, then multiply by z
-                    const final_color = g.Color{
-                        .r = (c0_over_z.r * bc0 + c1_over_z.r * bc1 + c2_over_z.r * bc2) * z,
-                        .g = (c0_over_z.g * bc0 + c1_over_z.g * bc1 + c2_over_z.g * bc2) * z,
-                        .b = (c0_over_z.b * bc0 + c1_over_z.b * bc1 + c2_over_z.b * bc2) * z,
-                    };
+                    var final_color: g.Color = undefined;
+
+                    // Use texture if available and UVs are provided
+                    if (has_uvs and self.texture != null) {
+                        // Interpolate UV coordinates with perspective correction
+                        const u = (uv0_over_z.x * bc0 + uv1_over_z.x * bc1 + uv2_over_z.x * bc2) * z;
+                        const v = (uv0_over_z.y * bc0 + uv1_over_z.y * bc1 + uv2_over_z.y * bc2) * z;
+
+                        final_color = self.texture.?.sample(u, v);
+                    } else {
+                        final_color = g.Color{
+                            .r = (c0_over_z.r * bc0 + c1_over_z.r * bc1 + c2_over_z.r * bc2) * z,
+                            .g = (c0_over_z.g * bc0 + c1_over_z.g * bc1 + c2_over_z.g * bc2) * z,
+                            .b = (c0_over_z.b * bc0 + c1_over_z.b * bc1 + c2_over_z.b * bc2) * z,
+                        };
+                    }
 
                     framebuffer[index] = final_color.toPacked();
                 }

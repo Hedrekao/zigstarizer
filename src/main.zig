@@ -3,9 +3,7 @@ const g = @import("geometry");
 const models = @import("model_registry");
 const Rasterizer = @import("rasterizer.zig");
 const Camera = @import("camera.zig");
-const c = @cImport(
-    @cInclude("SDL.h"),
-);
+const c = @import("c.zig").c;
 
 const SCREEN_WIDTH = 960;
 const SCREEN_HEIGHT = 640;
@@ -14,10 +12,6 @@ const NUM_THREADS = 8;
 
 const MOVE_SPEED = 15.0; // Units per second
 const ROTATE_SPEED = 1.0; // Radians per second
-
-const RED_COLOR = g.Color{ .r = 255, .g = 0, .b = 0 };
-const GREEN_COLOR = g.Color{ .r = 0, .g = 255, .b = 0 };
-const BLUE_COLOR = g.Color{ .r = 0, .g = 0, .b = 255 };
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -34,36 +28,13 @@ pub fn main() !void {
         return error.InvalidModel;
     };
 
-    std.debug.print("Loading model: {s} ({d} vertices, {d} faces)\n", .{
-        model_name,
-        model.vertices.len,
-        model.faces.len,
-    });
+    var color_mode: Rasterizer.ColorMode = .green;
 
-    const rainbow_mode = args.len > 2 and std.mem.eql(u8, args[2], "--rainbow");
-
-    // Pre-compute vertex colors (3 colors per triangle)
-    var vertex_colors = try allocator.alloc(g.Color, model.faces.len * 3);
-    defer allocator.free(vertex_colors);
-
-    for (model.faces, 0..) |face, i| {
-        if (rainbow_mode) {
-            vertex_colors[i * 3 + 0] = RED_COLOR;
-            vertex_colors[i * 3 + 1] = GREEN_COLOR;
-            vertex_colors[i * 3 + 2] = BLUE_COLOR;
-        } else {
-            const vertex_indices = face.vertex_indices;
-            const hash = (vertex_indices[0] *% 73) +% (vertex_indices[1] *% 151) +% (vertex_indices[2] *% 283);
-            const variation = @as(u8, @truncate(hash % 128));
-            const red: u8 = 0x20 + variation / 4;
-            const green: u8 = 0x80 + variation;
-            const blue: u8 = 0x20 + variation / 6;
-
-            const color = g.Color.fromU8(red, green, blue);
-            // All three vertices get the same color (flat shading)
-            vertex_colors[i * 3 + 0] = color;
-            vertex_colors[i * 3 + 1] = color;
-            vertex_colors[i * 3 + 2] = color;
+    if (args.len > 2) {
+        if (std.mem.eql(u8, args[2], "--rainbow")) {
+            color_mode = .rainbow;
+        } else if (std.mem.eql(u8, args[2], "--texture")) {
+            color_mode = .texture;
         }
     }
 
@@ -72,7 +43,7 @@ pub fn main() !void {
     var camera = Camera.init();
     camera.position = .{ .x = 0, .y = 10, .z = 40 };
 
-    var rasterizer = try Rasterizer.init(allocator, SCREEN_WIDTH, SCREEN_HEIGHT, NUM_THREADS, &model, vertex_colors);
+    var rasterizer = try Rasterizer.init(allocator, SCREEN_WIDTH, SCREEN_HEIGHT, NUM_THREADS, &model, color_mode);
     defer rasterizer.deinit();
 
     try rasterizer.startThreads();

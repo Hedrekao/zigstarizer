@@ -131,6 +131,9 @@ pub fn build(b: *std.Build) void {
         .root_module = root_module,
     });
 
+    exe.addIncludePath(b.path("thirdparty/"));
+    exe.addCSourceFiles(.{.files = &[_][]const u8{"thirdparty/stb_image.c"}});
+
     b.installArtifact(exe);
 
     // Run step (passes args to the executable)
