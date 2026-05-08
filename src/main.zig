@@ -13,15 +13,14 @@ const NUM_THREADS = 8;
 const MOVE_SPEED = 15.0; // Units per second
 const ROTATE_SPEED = 1.0; // Radians per second
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
 
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+    var args_iter = try init.minimal.args.iterateAllocator(allocator);
+    defer args_iter.deinit();
 
-    const model_name = if (args.len > 1) args[1] else "xtree";
+    _ = args_iter.skip();
+    const model_name = args_iter.next() orelse "xtree";
 
     const model = models.getModel(model_name) orelse {
         std.debug.print("Unknown model: {s}\nAvailable models: {s}\n", .{ model_name, models.available });
@@ -30,10 +29,10 @@ pub fn main() !void {
 
     var color_mode: Rasterizer.ColorMode = .green;
 
-    if (args.len > 2) {
-        if (std.mem.eql(u8, args[2], "--rainbow")) {
+    if (args_iter.next()) |flag| {
+        if (std.mem.eql(u8, flag, "--rainbow")) {
             color_mode = .rainbow;
-        } else if (std.mem.eql(u8, args[2], "--texture")) {
+        } else if (std.mem.eql(u8, flag, "--texture")) {
             color_mode = .texture;
         }
     }

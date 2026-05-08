@@ -1,24 +1,25 @@
 const std = @import("std");
 const g = @import("geometry.zig");
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+    var args_iter = try init.minimal.args.iterateAllocator(allocator);
+    defer args_iter.deinit();
 
-    if (args.len < 3) {
+    _ = args_iter.skip();
+    const input_path = args_iter.next() orelse {
         std.debug.print("Usage: obj2zig <input_path> <output_path>\n", .{});
         std.process.exit(1);
-    }
+    };
+    const output_path = args_iter.next() orelse {
+        std.debug.print("Usage: obj2zig <input_path> <output_path>\n", .{});
+        std.process.exit(1);
+    };
 
-    const input_path = args[1];
-    const output_path = args[2];
-
-    const input = try std.fs.cwd().openFile(input_path, .{});
-    defer input.close();
+    const input = try std.Io.Dir.openFileAbsolute(io, input_path, .{});
+    defer input.close(io);
 
     var faces = std.ArrayList(g.Face).empty;
     defer faces.deinit(allocator);
@@ -32,7 +33,7 @@ pub fn main() !void {
     const read_buf = try allocator.alloc(u8, 1024);
     defer allocator.free(read_buf);
 
-    var file_reader = input.reader(read_buf);
+    var file_reader = input.reader(io, read_buf);
     var reader = &file_reader.interface;
 
     while (try reader.takeDelimiter('\n')) |line| {
@@ -103,15 +104,17 @@ pub fn main() !void {
     }
 
     if (std.fs.path.dirname(output_path)) |dir_path| {
-        std.fs.cwd().makePath(dir_path) catch {};
+        if (dir_path.len != 0) {
+            try std.Io.Dir.createDirPath(std.Io.Dir.cwd(), io, dir_path);
+        }
     }
 
-    const output = try std.fs.cwd().createFile(output_path, .{});
-    defer output.close();
+    const output = try std.Io.Dir.createFileAbsolute(io, output_path, .{});
+    defer output.close(io);
 
     const write_buf = try allocator.alloc(u8, 65536);
     defer allocator.free(write_buf);
-    var file_writer = output.writer(write_buf);
+    var file_writer = output.writer(io, write_buf);
 
     var writer = &file_writer.interface;
 

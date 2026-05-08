@@ -29,6 +29,6 @@ To run one of the demos simply run (it will generate automatically required asse
 
 --rainbow flag will result in all triangles having one vertex red, one green, one blue
 
-(developed with zig version 0.15.2)
+(developed with zig version 0.16.0)
 
 

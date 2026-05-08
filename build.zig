@@ -3,16 +3,14 @@ const std = @import("std");
 fn generateModelRegistry(b: *std.Build, model_names: []const []const u8) []const u8 {
     // Build imports section
     var imports_buf: [4096]u8 = undefined;
-    var imports_fbs = std.io.fixedBufferStream(&imports_buf);
-    const imports_writer = imports_fbs.writer();
+    var imports_writer: std.Io.Writer = .fixed(&imports_buf);
     for (model_names) |name| {
         imports_writer.print("const {s} = @import(\"{s}\");\n", .{ name, name }) catch unreachable;
     }
 
     // Build getModel function body
     var getmodel_buf: [4096]u8 = undefined;
-    var getmodel_fbs = std.io.fixedBufferStream(&getmodel_buf);
-    const getmodel_writer = getmodel_fbs.writer();
+    var getmodel_writer: std.Io.Writer = .fixed(&getmodel_buf);
     for (model_names) |name| {
         getmodel_writer.print("    if (std.mem.eql(u8, name, \"{s}\"))\n", .{name}) catch unreachable;
         getmodel_writer.print("        return .{{ .vertices = &{s}.vertices, .faces = &{s}.faces, .texcoords = &{s}.texcoords }};\n", .{ name, name, name }) catch unreachable;
@@ -20,8 +18,7 @@ fn generateModelRegistry(b: *std.Build, model_names: []const []const u8) []const
 
     // Build available models list
     var available_buf: [1024]u8 = undefined;
-    var available_fbs = std.io.fixedBufferStream(&available_buf);
-    const available_writer = available_fbs.writer();
+    var available_writer: std.Io.Writer = .fixed(&available_buf);
     for (model_names, 0..) |name, i| {
         if (i > 0) available_writer.writeAll(", ") catch unreachable;
         available_writer.writeAll(name) catch unreachable;
@@ -42,7 +39,7 @@ fn generateModelRegistry(b: *std.Build, model_names: []const []const u8) []const
         \\
         \\pub const available = "{s}";
         \\
-    , .{ imports_fbs.getWritten(), getmodel_fbs.getWritten(), available_fbs.getWritten() });
+    , .{ imports_writer.buffered(), getmodel_writer.buffered(), available_writer.buffered() });
 }
 
 pub fn build(b: *std.Build) void {
@@ -125,14 +122,13 @@ pub fn build(b: *std.Build) void {
     });
 
     root_module.linkSystemLibrary("sdl2", .{});
+    root_module.addIncludePath(b.path("thirdparty/"));
+    root_module.addCSourceFiles(.{ .files = &[_][]const u8{"thirdparty/stb_image.c"} });
 
     const exe = b.addExecutable(.{
         .name = "main",
         .root_module = root_module,
     });
-
-    exe.addIncludePath(b.path("thirdparty/"));
-    exe.addCSourceFiles(.{.files = &[_][]const u8{"thirdparty/stb_image.c"}});
 
     b.installArtifact(exe);
 
@@ -146,4 +142,25 @@ pub fn build(b: *std.Build) void {
 
     const run_step = b.step("run", "Run the app (use: zig build run -- cow)");
     run_step.dependOn(&run_cmd.step);
+
+    var opengl_demo_module = b.createModule(.{
+        .root_source_file = b.path("src/opengl_demo.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    opengl_demo_module.linkSystemLibrary("sdl2", .{});
+    opengl_demo_module.addIncludePath(b.path("thirdparty/glad/include"));
+    opengl_demo_module.addCSourceFiles(.{ .files = &[_][]const u8{"thirdparty/glad/src/glad.c"} });
+    opengl_demo_module.addIncludePath(b.path("thirdparty/"));
+    opengl_demo_module.addCSourceFiles(.{ .files = &[_][]const u8{"thirdparty/stb_image.c"} });
+
+    const opengl_demo = b.addExecutable(.{
+        .name = "opengl_demo",
+        .use_llvm = true,
+        .root_module = opengl_demo_module,
+    });
+
+
+    b.installArtifact(opengl_demo);
 }
